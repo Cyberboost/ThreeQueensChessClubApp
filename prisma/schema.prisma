@@ -1,0 +1,424 @@
+// ============================================================
+// Three Queens Chess Club — Prisma Schema
+// Database: Neon Postgres (via Prisma)
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Use a separate non-pooled URL for migrations if needed (Neon)
+  // directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+// ─── Enums ───────────────────────────────────────────────────
+
+enum UserRole {
+  GUARDIAN
+  ADMIN
+}
+
+enum MatchMode {
+  PLAYER_VS_PLAYER
+  PLAYER_VS_AI
+  TRAINING
+}
+
+enum MatchStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  ABANDONED
+  DRAW
+}
+
+enum MatchResult {
+  WHITE_WINS
+  BLACK_WINS
+  DRAW
+  ABANDONED
+}
+
+enum MatchColor {
+  WHITE
+  BLACK
+}
+
+enum SkillLevel {
+  BEGINNER
+  EXPLORER
+  ADVENTURER
+  CHALLENGER
+  CHAMPION
+  QUEEN
+}
+
+enum TrainingSessionStatus {
+  ACTIVE
+  COMPLETED
+  ABANDONED
+}
+
+enum ModerationEventType {
+  CHAT_FLAG
+  BEHAVIOR_REPORT
+  ACCOUNT_REVIEW
+  CONTENT_REMOVAL
+  ACCOUNT_SUSPEND
+  ACCOUNT_UNSUSPEND
+}
+
+enum ModerationEventStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+enum AchievementCategory {
+  GAMEPLAY
+  TRAINING
+  SOCIAL
+  MILESTONE
+  SPECIAL
+}
+
+enum FriendInviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+// ─── User / Guardian ─────────────────────────────────────────
+
+/// A registered adult account. Guardians own and manage child profiles.
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique
+  email     String   @unique
+  role      UserRole @default(GUARDIAN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  childProfiles     ChildProfile[]
+  guardianSettings  GuardianSettings?
+  moderationActions ModerationEvent[] @relation("ModeratorActions")
+
+  @@map("users")
+}
+
+// ─── Guardian Settings ───────────────────────────────────────
+
+/// Per-guardian safety and control preferences.
+model GuardianSettings {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique
+  chatEnabled            Boolean  @default(false)
+  matchmakingEnabled     Boolean  @default(true)
+  maxDailyPlayMinutes    Int?
+  requireApprovalForPlay Boolean  @default(false)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("guardian_settings")
+}
+
+// ─── Child Profile ───────────────────────────────────────────
+
+/// A child profile managed under a guardian account.
+/// Children are not independent users — they exist within a guardian context.
+model ChildProfile {
+  id          String     @id @default(cuid())
+  guardianId  String
+  displayName String
+  avatarUrl   String?
+  dateOfBirth DateTime?
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  guardian           User                    @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+  ratingProfile      PlayerRatingProfile?
+  skillAssessments   SkillAssessment[]
+  trainingSessions   TrainingSession[]
+  matchParticipants  MatchParticipant[]
+  achievements       ChildAchievement[]
+  themeSelections    ChildThemeSelection[]
+  sentInvites        FriendInvite[]          @relation("InviteSender")
+  receivedInvites    FriendInvite[]          @relation("InviteReceiver")
+  aiRecommendations  AILevelRecommendation[]
+  moderationSubjects ModerationEvent[]       @relation("SubjectProfile")
+
+  @@map("child_profiles")
+}
+
+// ─── Player Rating Profile ────────────────────────────────────
+
+/// Tracks a child's current skill level and rating progression.
+model PlayerRatingProfile {
+  id               String     @id @default(cuid())
+  childProfileId   String     @unique
+  currentLevel     SkillLevel @default(BEGINNER)
+  internalRating   Float      @default(800)
+  gamesPlayed      Int        @default(0)
+  gamesWon         Int        @default(0)
+  gamesLost        Int        @default(0)
+  gamesDrawn       Int        @default(0)
+  totalMoves       Int        @default(0)
+  averageMoveScore Float?
+  lastPlayedAt     DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  childProfile ChildProfile @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+
+  @@map("player_rating_profiles")
+}
+
+// ─── Skill Assessment ─────────────────────────────────────────
+
+/// A point-in-time skill assessment for a child profile.
+model SkillAssessment {
+  id               String     @id @default(cuid())
+  childProfileId   String
+  conductedAt      DateTime   @default(now())
+  assignedLevel    SkillLevel
+  estimatedRating  Float
+  puzzleScore      Float?
+  openingScore     Float?
+  endgameScore     Float?
+  notes            String?
+  isInitial        Boolean    @default(false)
+
+  childProfile          ChildProfile           @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  aiLevelRecommendation AILevelRecommendation?
+
+  @@map("skill_assessments")
+}
+
+// ─── AI Level Recommendation ─────────────────────────────────
+
+/// AI-generated difficulty recommendation for a child.
+model AILevelRecommendation {
+  id                String     @id @default(cuid())
+  childProfileId    String
+  skillAssessmentId String?    @unique
+  recommendedLevel  SkillLevel
+  stockfishDepth    Int?
+  confidenceScore   Float?
+  reason            String?
+  accepted          Boolean    @default(false)
+  createdAt         DateTime   @default(now())
+
+  childProfile    ChildProfile     @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  skillAssessment SkillAssessment? @relation(fields: [skillAssessmentId], references: [id])
+
+  @@map("ai_level_recommendations")
+}
+
+// ─── Match ────────────────────────────────────────────────────
+
+/// A single chess game/match.
+model Match {
+  id            String       @id @default(cuid())
+  mode          MatchMode
+  status        MatchStatus  @default(PENDING)
+  result        MatchResult?
+  currentFen    String       @default("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+  pgn           String?
+  timeControlSeconds Int?
+  aiDepth       Int?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  participants MatchParticipant[]
+  moves        Move[]
+  trainingSessions TrainingSession[]
+
+  @@map("matches")
+}
+
+// ─── Match Participant ────────────────────────────────────────
+
+/// Links a child profile to a match with their assigned color and result.
+model MatchParticipant {
+  id             String      @id @default(cuid())
+  matchId        String
+  childProfileId String
+  color          MatchColor
+  ratingBefore   Float?
+  ratingAfter    Float?
+  ratingDelta    Float?
+  isAi           Boolean     @default(false)
+
+  match        Match        @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  childProfile ChildProfile @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, childProfileId])
+  @@map("match_participants")
+}
+
+// ─── Move ─────────────────────────────────────────────────────
+
+/// A single move made during a match.
+model Move {
+  id             String   @id @default(cuid())
+  matchId        String
+  moveNumber     Int
+  color          MatchColor
+  san            String
+  uci            String
+  fenAfter       String
+  timeTakenMs    Int?
+  evalScore      Float?
+  evalCategory   String?
+  isCapture      Boolean  @default(false)
+  isCheck        Boolean  @default(false)
+  isCastle       Boolean  @default(false)
+  isPromotion    Boolean  @default(false)
+  hintsUsed      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, moveNumber, color])
+  @@map("moves")
+}
+
+// ─── Training Session ─────────────────────────────────────────
+
+/// A training or coaching session tied to a child and optionally a match.
+model TrainingSession {
+  id             String                @id @default(cuid())
+  childProfileId String
+  matchId        String?
+  status         TrainingSessionStatus @default(ACTIVE)
+  focusArea      String?
+  totalHints     Int                   @default(0)
+  totalMoves     Int                   @default(0)
+  accuracyScore  Float?
+  startedAt      DateTime              @default(now())
+  completedAt    DateTime?
+  notes          String?
+
+  childProfile ChildProfile @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  match        Match?       @relation(fields: [matchId], references: [id])
+
+  @@map("training_sessions")
+}
+
+// ─── Achievement ─────────────────────────────────────────────
+
+/// Definition of an achievement that can be unlocked.
+model Achievement {
+  id          String              @id @default(cuid())
+  slug        String              @unique
+  title       String
+  description String
+  category    AchievementCategory
+  iconUrl     String?
+  xpReward    Int                 @default(0)
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+
+  unlocks ChildAchievement[]
+
+  @@map("achievements")
+}
+
+// ─── Child Achievement ────────────────────────────────────────
+
+/// Tracks which achievements a child profile has unlocked.
+model ChildAchievement {
+  id               String   @id @default(cuid())
+  childProfileId   String
+  achievementId    String
+  unlockedAt       DateTime @default(now())
+  seen             Boolean  @default(false)
+
+  childProfile ChildProfile @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  achievement  Achievement  @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([childProfileId, achievementId])
+  @@map("child_achievements")
+}
+
+// ─── Theme ────────────────────────────────────────────────────
+
+/// Board and piece theme packs available in the app.
+model Theme {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  previewUrl  String?
+  isPremium   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  childSelections ChildThemeSelection[]
+
+  @@map("themes")
+}
+
+// ─── Child Theme Selection ────────────────────────────────────
+
+model ChildThemeSelection {
+  id             String   @id @default(cuid())
+  childProfileId String
+  themeId        String
+  selectedAt     DateTime @default(now())
+
+  childProfile ChildProfile @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  theme        Theme        @relation(fields: [themeId], references: [id], onDelete: Cascade)
+
+  @@unique([childProfileId])
+  @@map("child_theme_selections")
+}
+
+// ─── Friend Invite ────────────────────────────────────────────
+
+/// Friend requests between child profiles (guardian-moderated).
+model FriendInvite {
+  id           String             @id @default(cuid())
+  senderId     String
+  receiverId   String
+  status       FriendInviteStatus @default(PENDING)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  sender   ChildProfile @relation("InviteSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver ChildProfile @relation("InviteReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+  @@map("friend_invites")
+}
+
+// ─── Moderation Event ─────────────────────────────────────────
+
+/// Records of moderation actions or flags on the platform.
+model ModerationEvent {
+  id               String                @id @default(cuid())
+  type             ModerationEventType
+  status           ModerationEventStatus @default(OPEN)
+  subjectProfileId String?
+  moderatorId      String?
+  description      String
+  metadata         Json?
+  resolvedAt       DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  subjectProfile ChildProfile? @relation("SubjectProfile", fields: [subjectProfileId], references: [id])
+  moderator      User?         @relation("ModeratorActions", fields: [moderatorId], references: [id])
+
+  @@map("moderation_events")
+}

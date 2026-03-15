@@ -1,0 +1,16 @@
+node_modules
+.next
+out
+dist
+.env.local
+.env*.local
+.vercel
+*.log
+.DS_Store
+Thumbs.db
+.turbo
+coverage
+.swc
+prisma/*.db
+prisma/*.db-journal
+generated
